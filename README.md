@@ -4,9 +4,9 @@ The intent is to use this as an INIT program to allow multiple other programs to
 
 For example, to load all of nitro, turbo, and hydro at boot time, create a text file named INIT.rc that contains the following:
 
-nitro
-turbo
-hydro
+nitro<br>
+turbo<br>
+hydro<br>
 
 Due to some constraints of Elf/OS and it's intended use, there are some limitations. This program loads into memory at $5000 which means it cannot run a program that needs more than 12K of memory. Likewise, a programs that allocates from himem cannot allocate more than about 12K of memory in total.
 
