@@ -27,9 +27,9 @@ start:     org     5000h
            ; Build information
 
            db      6+80h              ; month
-           db      5                  ; day
+           db      9                  ; day
            dw      2021               ; year
-           dw      1                  ; build
+           dw      2                  ; build
 text:      db      'Written by David S. Madole',0
 
            ; Default file name
@@ -117,11 +117,6 @@ openfile:  sep     scall              ; open file
            ldi     buffer.0
            plo     rf
 
-           glo     rf
-           plo     rb
-           ghi     rf
-           phi     rb
-
            ghi     rc
            adi     1
            phi     rc
@@ -130,37 +125,67 @@ getline:   dec     rc
            ghi     rc
            bz      endfile
 
-           lda     rb
+           lda     rf
            smi     '!'
            bnf     getline
+
+           inc     rc
+           dec     rf
+
+           ghi     rf
+           phi     ra
+           phi     rb
+           glo     rf
+           plo     ra
+           plo     rb
 
 scanline:  dec     rc
            ghi     rc
            bz      endfile
 
-           lda     rb
+           lda     ra
            smi     ' '
            bdf     scanline
 
-           dec     rb
+           dec     ra
            ldi     0
-           str     rb
-           inc     rb
+           str     ra
+           inc     ra
 
            dec     r2
-           glo     rb
+           glo     ra
            stxd
-           ghi     rb
+           ghi     ra
            stxd
            glo     rc
            stxd
            ghi     rc
            stxd
 
+           ldi     filepath.1
+           phi     rd
+           ldi     filepath.0
+           plo     rd
+
+strcpy:    lda     rb
+           str     rd
+           inc     rd
+           bnz     strcpy
+
            sep     r4
            dw      o_exec
+           bnf     execgood
 
-           ldi     crlf.1
+           ldi     binpath.1
+           phi     rf
+           ldi     binpath.0
+           plo     rf
+ 
+           sep     r4
+           dw      o_exec
+           bdf     execfail
+
+execgood:  ldi     crlf.1
            phi     rf
            ldi     crlf.0
            plo     rf
@@ -168,16 +193,14 @@ scanline:  dec     rc
            sep     r4
            dw      f_msg
 
-           inc     r2
+execfail:  inc     r2
            ldxa
            phi     rc
            ldxa
            plo     rc
            ldxa
-           phi     rb
            phi     rf
            ldxa
-           plo     rb
            plo     rf
            
            br      getline
@@ -222,9 +245,12 @@ fd:        db      0,0,0,0
            db      0,0,0,0
 
 
+binpath:   db      '/BIN/'
+
 end:       ; These buffers are not included in the executable image but will
            ; will be in memory immediately following the loaded image.
 
+filepath:  ds      0
 dta:       ds      512
 buffer:    ds      2048
 
