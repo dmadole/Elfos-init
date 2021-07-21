@@ -31,9 +31,9 @@ start:     org     5000h
            ; Build information
 
            db      7+80h              ; month
-           db      20                 ; day
+           db      21                 ; day
            dw      2021               ; year
-           dw      4                  ; build
+           dw      5                  ; build
 text:      db      'Written by David S. Madole',0
 
            ; Default file name
@@ -151,7 +151,7 @@ openfile:  sep     scall              ; open file
            ; Now process the input file which has been read into memory
            ; one line at a time, executing each line as a command line
            ; including any arguments provided. This looks in the current
-           ; directory and then in BIN directory if not found.
+           ; directory and then in bin directory if not found.
 
            ldi     buffer.1           ; reset buffer to beginning of input
            phi     rf
@@ -208,11 +208,11 @@ scanline:  dec     rc                 ; if at end of input, then quit
 
            ldi     filepath.1         ; make a copy of the command line
            phi     rd                 ; concatenated to the static string
-           ldi     filepath.0         ; /BIN/ so that we can try that if
+           ldi     filepath.0         ; /bin/ so that we can try that if
            plo     rd                 ; program not found in current directory
 
 strcpy:    lda     rb                 ; the copy is needed not just to prepend
-           str     rd                 ; /BIN/ but also because o_exec modifies
+           str     rd                 ; /bin/ but also because o_exec modifies
            inc     rd                 ; the string it is passed in-place so
            lbnz    strcpy             ; we can't reuse it
 
@@ -232,7 +232,7 @@ strcpy:    lda     rb                 ; the copy is needed not just to prepend
            lbnf    execgood
 
            ldi     binpath.1          ; if unsuccessful, reset pointer to the
-           phi     rf                 ; copy with /BIN/ prepended
+           phi     rf                 ; copy with /bin/ prepended
            ldi     binpath.0
            plo     rf
  
@@ -344,7 +344,7 @@ fd:        db      0,0,0,0
            ; a second time if the first time fails to find the command in
            ; the current directory.
 
-binpath:   db      '/BIN/'    ; needs to be immediately prior to filepath
+binpath:   db      '/bin/'    ; needs to be immediately prior to filepath
 
 end:       ; These buffers are not included in the executable image but will
            ; will be in memory immediately following the loaded image.
