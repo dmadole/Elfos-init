@@ -14,6 +14,10 @@
            include bios.inc
            include kernel.inc
 
+           ; Non-published kernel interfaces
+
+d_reapheap equ 044dh
+
            ; Executable program header
 
            org     5000h - 6
@@ -26,10 +30,10 @@ start:     org     5000h
 
            ; Build information
 
-           db      6+80h              ; month
-           db      16                 ; day
+           db      7+80h              ; month
+           db      20                 ; day
            dw      2021               ; year
-           dw      3                  ; build
+           dw      4                  ; build
 text:      db      'Written by David S. Madole',0
 
            ; Default file name
@@ -40,9 +44,9 @@ default:   db      'init.rc INIT.rc',0
 
 main:      bn4     prepare
 
-           sep     r4
-           dw      f_setbd
-           sep     r5
+           sep     scall
+           dw      o_setbd
+           sep     sret
 
 prepare:   ldi     fd.1               ; get file descriptor
            phi     rd
@@ -223,7 +227,7 @@ strcpy:    lda     rb                 ; the copy is needed not just to prepend
            glo     r2                 ; of using sep sret
            str     rd
 
-           sep     r4                 ; try executing the plain command line
+           sep     scall              ; try executing the plain command line
            dw      o_exec
            lbnf    execgood
 
@@ -232,7 +236,7 @@ strcpy:    lda     rb                 ; the copy is needed not just to prepend
            ldi     binpath.0
            plo     rf
  
-           sep     r4                 ; and then try that one
+           sep     scall              ; and then try that one
            dw      o_exec
            lbdf    execfail
 
@@ -241,10 +245,13 @@ execgood:  ldi     crlf.1             ; if exec is succesful, output a blank
            ldi     crlf.0
            plo     rf
 
-           sep     r4
-           dw      f_msg
+           sep     scall
+           dw      o_msg
 
-execfail:  inc     r2                 ; if return is directly here, then
+execfail:  sep     scall
+           dw      d_reapheap
+
+           inc     r2                 ; if return is directly here, then
            ldxa                       ; execed program used sep sret and stack
            phi     rc                 ; is set correctly, restore the pointer
            ldxa                       ; to the input and length of input
@@ -294,7 +301,7 @@ endfile:   ldi     o_wrmboot.1        ; pointer to o_wrmboot jump vector
            ldn     rf
            str     rd
 
-           sep     r5                 ; return to elf/os
+           sep     sret               ; return to elf/os
 
 crlf:      db      13,10,0
 
