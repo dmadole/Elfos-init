@@ -1,12 +1,18 @@
-; This software is copyright 2021 by David S. Madole.
-; You have permission to use, modify, copy, and distribute
-; this software so long as this copyright notice is retained.
-; This software may not be used in commercial applications
-; without express written permission from the author.
+
+;  Copyright 2021, David S. Madole <david@madole.net>
 ;
-; The author grants a license to Michael H. Riley to use this
-; code for any purpose he sees fit, including commercial use,
-; and without any need to include the above notice.
+;  This program is free software: you can redistribute it and/or modify
+;  it under the terms of the GNU General Public License as published by
+;  the Free Software Foundation, either version 3 of the License, or
+;  (at your option) any later version.
+;
+;  This program is distributed in the hope that it will be useful,
+;  but WITHOUT ANY WARRANTY; without even the implied warranty of
+;  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;  GNU General Public License for more details.
+;
+;  You should have received a copy of the GNU General Public License
+;  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
            ; Include kernal API entry points
@@ -14,344 +20,554 @@
            include bios.inc
            include kernel.inc
 
+
            ; Non-published kernel interfaces
 
 d_reapheap equ 044dh
 
+
            ; Executable program header
 
-           org     5000h - 6
+           org     2000h - 6
            dw      start
            dw      end-start
            dw      start
 
-start:     org     5000h
+
+start:     org     2000h
            br      main
+
 
            ; Build information
 
-           db      7+80h              ; month
-           db      21                 ; day
+           db      8+80h              ; month
+           db      2                  ; day
            dw      2021               ; year
-           dw      5                  ; build
-text:      db      'Written by David S. Madole',0
+           dw      6                  ; build
+text:      db      'See github.com/dmadole/Elfos-init for more info',0
 
-           ; Default file name
 
-default:   db      'init.rc INIT.rc',0
+           ; Main code starts here, check if EF4 signal is asserted, if so,
+           ; just quickly exit. This is to allow bypassing of init at 
+           ; start-up in case a file it is calling is crashing or similar.
 
-           ; Main code starts here , check provided argument
+main:      ldi     0                  ; clear flag for verbose output
+           plo     rb
 
-main:      bn4     prepare
+           bn4     checkopt           ; if ef4 not asserted, start normally
 
-           sep     scall
+           sep     scall              ; otherwise set auto-baud and return
            dw      o_setbd
+
+return:    sep     sret               ; return to elf/os
+
+
+           ; Check for command-line arguments. Only one option is recognized
+           ; which is -v for verbose output. Normally init avoids sending
+           ; any output, especially not until after the first program has
+           ; run, since at startup there is no good way to know if we even
+           ; have a valid output device that is configured properly.
+           ; The -v option enables error messages that would be suppressed
+           ; otherwise, for help in troubleshooting.
+
+checkopt:  lda     ra                  ; skip any whitespace
+           lbz     rewindin
+           smi     '!'
+           lbnf    checkopt
+
+           smi     '-'-'!'             ; if char is not dash, then not valid
+           lbnz    rewindin
+
+           lda     ra                  ; if option is not 'v' then not valid
+           smi     'v'
+           lbz     verbose
+
+           sep     sret                ; ironically, we cant give an error
+
+verbose:   inc     rb                  ; enable output
+
+checkend:  lda     ra                  ; skip any whitespace
+           lbz     rewindin
+           smi     '!'
+           lbnf    checkend
+
+rewindin:  dec     ra                  ; backup to reverse inc of lda
+
+
+           ; Check minimum kernel version we need before doing anything else,
+           ; in particular we need support for the heap manager to allocate
+           ; memory for the persistent module to use.
+
+           ldi     high k_ver          ; get pointer to kernel version
+           phi     r7
+           ldi     low k_ver
+           plo     r7
+
+           lda     r7                  ; if major is non-zero we are good
+           lbnz    findfile
+
+           lda     r7                  ; if major is zero and minor is 4
+           smi     4                   ;  or higher we are good
+           lbdf    findfile
+
+           glo     rb                  ; only output if verbose set
+           lbz     return
+
+           sep     scall               ; if not meeting minimum version
+           dw      o_inmsg
+           db      'ERROR: Needs kernel version 0.4.0 or higher',13,10,0
            sep     sret
 
-prepare:   ldi     fd.1               ; get file descriptor
+
+           ; If no filename were provided on the command line, load pointer
+           ;  to default list of input files to search for.
+
+findfile:  ldi     high fd            ; get file descriptor
            phi     rd
-           ldi     fd.0
+           ldi     low fd
            plo     rd
 
            ldi     0                  ; no flags for open
            plo     r7
 
-           lbr     firstnam
+           ldn     ra                 ; are we at end of string
+           lbnz    nextname
 
-skipspc1:  inc     ra
-firstnam:  ldn     ra                 ; skip any spaces
-           lbz     usedeflt
-           smi     '!'
-           lbnf    skipspc1
-
-           lbr     markname
-
-usedeflt:  ldi     default.1
-           phi     ra
-           ldi     default.0
+           ldi     high default       ; load pointer to default
+           phi     ra                 ;  filename list
+           ldi     low default
            plo     ra
 
-           lbr     markname
 
-skipspc2:  inc     ra
-nextname:  ldn     ra                 ; skip any spaces
-           lbz     notfound
-           smi     '!'
-           lbnf    skipspc2
+           ; Process next filename. When o_open fails to open a file, it 
+           ; loops back to here to search for next in list.
 
-markname:  glo     ra                 ; remember start of name
-           plo     rf
+nextname:  lda     ra                 ; skip any spaces before name
+           lbnz    notatend
+
+           glo     rb                 ; only output if verbose set
+           lbz     return
+
+           sep     scall              ; reached the end of the list
+           dw      o_inmsg
+           db      'ERROR: Config file was not found',13,10,0
+           sep     sret
+
+notatend:  smi     '!'                ; skip any whitespace
+           lbnf    nextname
+
+           dec     ra                 ; under the inc of lda
+
+markname:  glo     ra                 ; save pointer to start of name
+           plo     rf                 ;  for o_open to use
            ghi     ra
            phi     rf
 
-skipchar:  inc     ra
-           ldn     ra                 ; end at null or space
+skipchar:  inc     ra                 ; advance to end or to space
+           ldn     ra 
            lbz     openfile
            smi     '!'
            lbdf    skipchar
 
-           glo     r7
-           str     ra
+           ldi     0                  ; overwrite separating space with
+           str     ra                 ;  null to terminate name
            inc     ra
 
-           ; Open file for input and read data
-
-openfile:  sep     scall              ; open file
+openfile:  sep     scall              ; try to open this file
            dw      o_open
-           lbdf    nextname
 
-           ldi     buffer.1           ; pointer to data buffer
-           phi     rf
-           ldi     buffer.0
-           plo     rf
+           lbdf    nextname           ; if unsuccessful, try next one
 
-           ldi     2048.1             ; file length to read
+
+           ; Allocate memory from the heap for the resident part of init
+           ; that runs the child processes. Address of block to copy that
+           ; code into will be leftin RF.
+
+           ldi     high modend-module  ; size of permanent code module
            phi     rc
-           ldi     2048.0
+           ldi     low modend-module
            plo     rc
 
-           sep     scall              ; read from file
+           ldi     255                 ; request page-aligned block
+           phi     r7
+           ldi     0
+           plo     r7
+
+           sep     scall               ; allocate block on heap
+           dw      o_alloc
+
+           lbnf    copycode            ; allocation succeeded, copy code
+
+memerror:  glo     rb                  ; only output error if verbose set
+           lbz     closeit
+
+           sep     scall               ; if unable to get memory
+           dw      o_inmsg
+           db      'ERROR: Not enough memory available to load',13,10,0
+
+closeit:   sep     scall               ; close input file
+           dw      o_close
+           sep     sret                ; return to elf/os
+
+
+           ; Copy the code of the resident part of init to the memory block
+           ;  that was just allocated using RF for destination.
+
+copycode:  ghi     rf                  ; save a copy of block pointer
+           phi     ra
+           glo     rf
+           plo     ra
+
+           ldi     high module         ; get source address to copy from
+           phi     r7
+           ldi     low module
+           plo     r7
+
+           ldi     high modend-module  ; get length of code to copy
+           phi     rc
+           ldi     low modend-module
+           plo     rc
+
+copyloop:  lda     r7                  ; copy code to destination address
+           str     rf
+           inc     rf
+           dec     rc
+           glo     rc
+           lbnz    copyloop
+           ghi     rc
+           lbnz    copyloop
+
+
+           ; Get size of the input file by seeking to end of file, which
+           ; return the length as the new seek offset.
+
+           ldi     0                   ; load zero to offset
+           phi     r8
+           plo     r8
+           phi     r7
+           plo     r7
+
+           ldi     2                   ; seek relative to end
+           plo     rc
+
+           sep     scall               ; seek to end of file
+           dw      o_seek
+
+           ghi     r8                  ; if 64K or larger then impossible
+           lbnz    memerror
+           glo     r8
+           lbnz    memerror
+
+
+           ; Allocate a block of memory that is the size of the configuration
+           ; file plus one byte to zero terminate it.
+
+           ghi     r7                  ; get size of file for heap
+           phi     rc                  ;  block request
+           glo     r7
+           plo     rc
+
+           inc     rc                  ; one more for terminating null
+
+           ldi     0                   ; no alignment needed
+           phi     r7
+           plo     r7
+
+           sep     scall               ; make allocation on heap,
+           dw      o_alloc             ;  fail if can't be satisfied
+
+           lbdf    memerror
+
+
+           ; Seek to beginning of file and then read it into the heap
+           ; block that was permanently allocated for it.
+
+           ldi     0                   ; set offset to zero
+           phi     r8
+           plo     r8
+           phi     r7
+           plo     r7
+
+           plo     rc                  ; from start of file
+
+           sep     scall               ; seek to start
+           dw      o_seek
+
+           ghi     rf                  ; save copy of start of block
+           phi     r9
+           glo     rf
+           plo     r9
+
+           ldi     255                 ; read until end of file
+           phi     rc
+           plo     rc
+
+           sep     scall               ; read from file
            dw      o_read
 
-           sep     scall              ; close file when done
+           ldi     0                   ; zero terminate input file
+           str     rf
+
+           sep     scall               ; close file when done
            dw      o_close
 
-           ; We need to intercept the kernel o_wrmboot jump vector because,
-           ; believe it or not, that is the recommended way for programs to
-           ; return to Elf/OS, and apparently many do so. So we save what's
-           ; there now, replace it with our own handler, then restore later.
 
-           ldi     o_wrmboot.1        ; pointer to o_wrmboot jump vector
-           phi     rd
-           ldi     o_wrmboot.0
-           plo     rd
+           ; Setup RF to point to input configuration in memory, and also
+           ; push a copy to the stack that will be used to reference the
+           ; block in the module to make it temporarily permanent so it
+           ; doesn't get purged by d_reapheap.
 
-           inc     rd                 ; skip lbr instruction
-
-           ldi     warmsave.1         ; pointer to save o_wrmboot into
-           phi     rf
-           ldi     warmsave.0
+           glo     r9                 ; save start of buffer, to stack
            plo     rf
+           stxd                       ;  stack to use to delete at exit
+           ghi     r9
+           phi     rf
+           stxd
 
-           ldn     rd                 ; save o_wrmboot high byte
-           str     rf
 
-           ldi     warmretn.1         ; replace o_wrmboot high byte
-           str     rd
+           ; Jump to the persistent code that has been copied into high
+           ; memory. Since this address is in a register and not known, do
+           ; the jump by switching to RD, then loading R3 and switching back.
 
-           inc     rd                 ; switch to low bytes
-           inc     rf
+           ldi     high jumpblck      ; temporarily switch pc to rd so we
+           phi     rd                 ;  can load r3 for a jump
+           ldi     low jumpblck
+           plo     rd
+           sep     rd
 
-           ldn     rd                 ; save o_wrmboot low byte
-           str     rf
+jumpblck:  ghi     ra                 ; load r3 with code block address
+           phi     r3                 ;  and switch pc back to r3 to jump
+           glo     ra
+           plo     r3
+           sep     r3
 
-           ldi     warmretn.0         ; replace o_wrmboot high byte
-           str     rd
 
-           ; Now process the input file which has been read into memory
+;-------------------------------------------------------------------------
+
+           ; Start the persistent module code on a new page so that it forms
+           ; a block of page-relocatable code that will be copied to himem.
+
+           org     (($ + 0ffh) & 0ff00h)
+
+module:    ; Memory-resident module code starts here
+
+
+           ; This processes the input file which has been read into memory
            ; one line at a time, executing each line as a command line
            ; including any arguments provided. This looks in the current
            ; directory and then in bin directory if not found.
 
-           ldi     buffer.1           ; reset buffer to beginning of input
-           phi     rf
-           ldi     buffer.0
-           plo     rf
-
-           ghi     rc                 ; has the length of data to process,
-           adi     1                  ; adjust it so that we can just test
-           phi     rc                 ; the high byte for end of input
-
            ; From here is where we repeatedly loop back for input lines and
            ; process each as a command line.
 
-getline:   dec     rc                 ; if at end of input, then quit
-           ghi     rc
-           lbz     endfile
+getline:   lda     rf                 ; skip any leading whitespace
+           bz      endfile
+           smi     '!'
+           bnf     getline
 
-           lda     rf                 ; otherwise, skip any whitespace
-           smi     '!'                ; leading the command line
-           lbnf    getline
+           dec     rf                 ; back up because of lda above
 
-           inc     rc                 ; back up to first non-whitespace
-           dec     rf                 ; characters of command
-
-           ghi     rf                 ; make two copies of pointer to
-           phi     ra                 ; command line
+           ghi     rf                 ; make three copies of pointer to
+           phi     r9                 ;  command line for various copying
+           phi     ra
            phi     rb
            glo     rf
+           plo     r9
            plo     ra
            plo     rb
 
-scanline:  dec     rc                 ; if at end of input, then quit
-           ghi     rc
-           lbz     endfile
-
-           lda     ra                 ; otherwise, skip to first control
-           smi     ' '                ; characters after command
-           lbdf    scanline
+scanline:  lda     ra                 ; skip to first control character
+           bz      endfile
+           smi     ' '
+           bdf     scanline
 
            dec     ra                 ; back up to first control character
-           ldi     0                  ; and overwrite with zero byte, then
-           str     ra                 ; advance again
+           ldi     0                  ;  and overwrite with zero byte, then
+           str     ra                 ;  advance again
            inc     ra
 
-           dec     r2                 ; save pointer to next input to process
-           glo     ra                 ; as well as length of input remaining
-           stxd                       ; since executing the program may wipe
-           ghi     ra                 ; out all register contents as o_exec
-           stxd                       ; does not preserve register values as
-           glo     rc                 ; most elf/os calls do
+           ; Count length of command line string so we can copy it
+
+           ldi     0                  ; prepare to count string length,
+           phi     rc                 ;  start with length of /bin/
+           ldi     5
+           plo     rc
+
+strlen:    lda     rf                 ; get length of command line
+           inc     rc                 ;  including terminating null
+           bnz     strlen
+
+           ; Allocate block on heap for copy of string
+
+           ldi     0                  ; no alignment needed, and only
+           phi     r7                 ;  temporary block
+           plo     r7
+
+           sep     scall              ; get block, if fails, treat as eof
+           dw      o_alloc
+
+           bdf     endfile
+
+           ; Save pointers that we will need preserved across o_exec
+
+           glo     ra                 ; point to restart command scanning
            stxd
-           ghi     rc
+           ghi     ra
            stxd
 
-           ldi     filepath.1         ; make a copy of the command line
-           phi     rd                 ; concatenated to the static string
-           ldi     filepath.0         ; /bin/ so that we can try that if
-           plo     rd                 ; program not found in current directory
+           glo     rf                 ; pointer to /bin/ prefixed string
+           stxd
+           ghi     rf
+           stxd
 
-strcpy:    lda     rb                 ; the copy is needed not just to prepend
-           str     rd                 ; /bin/ but also because o_exec modifies
-           inc     rd                 ; the string it is passed in-place so
-           lbnz    strcpy             ; we can't reuse it
+           ; Concatenate /bin/ + command into allocated block
 
-           ldi     stcksave.1         ; pointer to save stack register to
-           phi     rd
-           ldi     stcksave.0
-           plo     rd
+           ghi     r3                 ; get pointer to /bin/ string
+           phi     ra
+           ldi     low binpath
+           plo     ra
 
-           ghi     r2                 ; save stack pointer so that we can
-           str     rd                 ; restore after o_exec in case called
-           inc     rd                 ; program exits using o_wrmboot instead
-           glo     r2                 ; of using sep sret
-           str     rd
+strcpy:    lda     ra                 ; copy into start of the block
+           str     rf
+           inc     rf
+           bnz     strcpy
 
-           sep     scall              ; try executing the plain command line
-           dw      o_exec
-           lbnf    execgood
+           dec     rf                 ; backup to terminating null
 
-           ldi     binpath.1          ; if unsuccessful, reset pointer to the
-           phi     rf                 ; copy with /bin/ prepended
-           ldi     binpath.0
-           plo     rf
- 
-           sep     scall              ; and then try that one
-           dw      o_exec
-           lbdf    execfail
+strcat:    lda     rb                 ; concatenate the command
+           str     rf
+           inc     rf
+           bnz     strcat
 
-execgood:  ldi     crlf.1             ; if exec is succesful, output a blank
-           phi     rf                 ; line to separate output
-           ldi     crlf.0
+           ; Try calling o_exec on the original command line
+
+           ghi     r9                 ; get pointer to command line
+           phi     rf
+           glo     r9
            plo     rf
 
-           sep     scall
-           dw      o_msg
+           sep     scall              ; try executing it
+           dw      o_exec
 
-execfail:  sep     scall
+           inc     r2                 ; pop pointer to the /bin/ prefixed
+           lda     r2                 ;  string here to clear from stack
+           phi     rf
+           ldn     r2
+           plo     rf
+
+           bnf     execgood           ; if plain exec was good
+
+           sep     scall              ; try executing it
+           dw      o_exec
+
+           bdf     execfail           ; if second try failed also
+
+execgood:  sep     scall              ; output a blank line if succeeded
+           dw      o_inmsg
+           db      10,13,0
+
+           ; Get ready for next loop around
+
+execfail:  inc     r2                 ; restore input pointer from stack
+           lda     r2                 ;  to restart line scanning from
+           phi     ra
+           ldn     r2
+           plo     ra
+           
+           ; Clean up heap from exec'ed program. This marks the two blocks
+           ; we use as permanent before calling reapheap so that they don't
+           ; get removed, then unmarks them after. This is done this way
+           ; so that the blocks are not marked permanent when the child
+           ; program is so that they will get cleaned up in case the
+           ; child process does not return to us, so they are not abandoned.
+
+           inc     r2                 ; get pointer to data input block
+           lda     r2                 ;  so we can mark it permanent
+           phi     rb
+           ldn     r2
+           plo     rb
+
+           dec     r2                 ; push pointer back on stack so
+           ghi     rb                 ;  we can pop it again next time
+           stxd
+           
+           ghi     r3                 ; get pointer to code block
+           phi     rc
+           ldi     low module
+           plo     rc
+
+           dec     rb                 ; move to header and mark permanent
+           dec     rb
+           dec     rb
+           ldn     rb
+           ori     4
+           str     rb
+
+           dec     rc                 ; move to header and mark permanent
+           dec     rc
+           dec     rc
+           ldn     rc
+           ori     4
+           str     rc
+
+           sep     scall              ; clean heap of temporary blocks
            dw      d_reapheap
 
-           inc     r2                 ; if return is directly here, then
-           ldxa                       ; execed program used sep sret and stack
-           phi     rc                 ; is set correctly, restore the pointer
-           ldxa                       ; to the input and length of input
-           plo     rc
-           ldxa
-           phi     rf
-           ldxa
-           plo     rf
-           
-           lbr      getline            ; go find next line to process
+           ldn     rb                 ; unmark permanent
+           xri     4
+           str     rb
 
-           ; If the execed program ends with lbr o_wrmboot instead of sep sret
-           ; then control will come here. Restore the saved stack pointer and
-           ; jump to the normal return point.
+           ldn     rc                 ; unmark permanent
+           xri     4
+           str     rc
 
-warmretn:  ldi     stcksave.1         ; pointer to saved stack pointer value
-           phi     rf
-           ldi     stcksave.0
+           ghi     ra                 ; when this was written, o_reapheap
+           phi     rf                 ;  destroys rf, otherwise this would
+           glo     ra                 ;  have gone directly into rf
            plo     rf
 
-           lda     rf                 ; copy saved value back into r2
-           phi     r2
-           ldn     rf
-           plo     r2
-           sex     r2             
+           br      getline            ; go find next line to process
 
-           lbr     execgood           ; jump to normal return code
 
-           ; Before we exit, we need to restore the original value of 
-           ; o_wrmboot which we replaced earlier to point to our own
-           ; return handling code.
+           ; At end of file (or an unlikely out of memory condition),
+           ; just drop up the data block pointer on the stack and
+           ; return. Since the heap blocks we allocated are marked
+           ; temporary, they will be cleaned up by Elf/OS.
 
-endfile:   ldi     o_wrmboot.1        ; pointer to o_wrmboot jump vector
-           phi     rd
-           ldi     o_wrmboot.0
-           plo     rd
-           inc     rd                 ; skip lbr instruction
+endfile:   inc     r2                 ; remove pointer to data block
+           inc     r2
 
-           ldi     warmsave.1         ; pointer to saved original o_wrmboot
-           phi     rf
-           ldi     warmsave.0
-           plo     rf
+           sep     sret               ; return to caller
 
-           lda     rf                 ; restore saved o_wrmboot value
-           str     rd
-           inc     rd
-           ldn     rf
-           str     rd
 
-           sep     sret               ; return to elf/os
+           ; This buffer with prepended /bin/ is used to build a copy of
+           ; the command line to look in bin directory if not found in cwd.
 
-crlf:      db      13,10,0
+binpath:   db      '/bin/',0          ; for prefixing command line
+datafile:  dw      0
 
-           ; Error handling follows, mostly these just output a message and
-           ; exit, but readfail also closes the input file first since it
-           ; would be open at that point.
+modend:    ; End load the resident module code
 
-notfound:  ldi     openmesg.1   ; if unable to open input file
-           phi     rf
-           ldi     openmesg.0
-           plo     rf
-           lbr     failmsg
 
-readfail:  sep     scall        ; if read on input file fails
-           dw      o_close
+           ; Default list of filenames to search for
 
-           ldi     readmesg.1
-           phi     rf
-           ldi     readmesg.0
-           plo     rf
+default:   db      '/cfg/init.rc init.rc',0
 
-failmsg:   sep     scall       ; output the message and return
-           dw      o_msg
-           sep     sret
-
-openmesg:  db      'Input file not found',13,10,0
-readmesg:  db      'Read file failed',13,10,0
 
            ; Include file descriptor in program image so it is initialized.
 
-fd:        db      0,0,0,0
+fd:        db      0,0,0,0             ; file descriptor
            dw      dta
            db      0,0
            db      0
            db      0,0,0,0
-           dw      0,0
+           db      0,0
            db      0,0,0,0
 
-           ; This is used to prefix a copy of the path to pass to exec
-           ; a second time if the first time fails to find the command in
-           ; the current directory.
+dta:       ds      512                 ; space for dta
 
-binpath:   db      '/bin/'    ; needs to be immediately prior to filepath
 
-end:       ; These buffers are not included in the executable image but will
-           ; will be in memory immediately following the loaded image.
-
-filepath:  ds      0          ; overlay over dta, not used at same time
-dta:       ds      512-2-2    ; likewise, overlay dta and next two variables
-stcksave:  ds      2          ; place to save the stack while execing
-warmsave:  ds      2          ; place to save the o_wrmboot vector
-buffer:    ds      2048       ; load the input file to memory here
+end:       ; Last address used at all by the program. This will be set in 
+           ; the header for the executable length so that lowmem gets set
+           ; here to prevent collision with static data.
 
