@@ -8,7 +8,7 @@ nitro
 turbo  
 hydro  
 
-As of build 6, this program is compatible with (and only with) Elf/OS kernel 0.4.0 and later and uses the new heap manager to allocate memory and manage memory allocated by progams it invokes. This program also no longer interferes with other programs that are written to warm boot the operating system. When a program does so, however, that will forcably terminate init and remove it from memory, so any further programs specified in the input file will not be able to be executed.
+Builds later than 5 are only compatible with Elf/OS kernel 0.4.0 and later and use the new heap manager to allocate memory and manage memory allocated by progams it invokes. This program also no longer interferes with other programs that are written to warm boot the operating system. When a program does so, however, that will forcably terminate init and remove it from memory, so any further programs specified in the input file will not be able to be executed.
 
 Note that when Elf/OS finds an init program, it does not detect baud rate at startup like it normally does. This means that that either the first command in the input file should set the baud rate, or the baud rate should already be set before Elf/OS is booted. The former can be accomplished by using nitro as the first command, the latter will be accomplished if using a normal BIOS ROM that detects baud rate before loading Elf/OS.
 

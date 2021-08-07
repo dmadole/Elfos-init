@@ -1,4 +1,3 @@
-
 ;  Copyright 2021, David S. Madole <david@madole.net>
 ;
 ;  This program is free software: you can redistribute it and/or modify
@@ -21,18 +20,12 @@
            include kernel.inc
 
 
-           ; Non-published kernel interfaces
-
-d_reapheap equ 044dh
-
-
            ; Executable program header
 
            org     2000h - 6
            dw      start
            dw      end-start
            dw      start
-
 
 start:     org     2000h
            br      main
@@ -41,10 +34,11 @@ start:     org     2000h
            ; Build information
 
            db      8+80h              ; month
-           db      2                  ; day
+           db      6                  ; day
            dw      2021               ; year
-           dw      6                  ; build
-text:      db      'See github.com/dmadole/Elfos-init for more info',0
+           dw      0                  ; build
+
+           db      'See github.com/dmadole/Elfos-init for more info',0
 
 
            ; Main code starts here, check if EF4 signal is asserted, if so,
@@ -181,7 +175,7 @@ openfile:  sep     scall              ; try to open this file
 
            ; Allocate memory from the heap for the resident part of init
            ; that runs the child processes. Address of block to copy that
-           ; code into will be leftin RF.
+           ; code into will be left in RF.
 
            ldi     high modend-module  ; size of permanent code module
            phi     rc
@@ -190,7 +184,7 @@ openfile:  sep     scall              ; try to open this file
 
            ldi     255                 ; request page-aligned block
            phi     r7
-           ldi     0
+           ldi     4
            plo     r7
 
            sep     scall               ; allocate block on heap
@@ -211,22 +205,22 @@ closeit:   sep     scall               ; close input file
 
 
            ; Copy the code of the resident part of init to the memory block
-           ;  that was just allocated using RF for destination.
+           ; that was just allocated using RF for destination.
 
 copycode:  ghi     rf                  ; save a copy of block pointer
            phi     ra
            glo     rf
            plo     ra
 
-           ldi     high module         ; get source address to copy from
-           phi     r7
-           ldi     low module
-           plo     r7
-
            ldi     high modend-module  ; get length of code to copy
            phi     rc
            ldi     low modend-module
            plo     rc
+
+           ldi     high module         ; get source address to copy from
+           phi     r7
+           ldi     low module
+           plo     r7
 
 copyloop:  lda     r7                  ; copy code to destination address
            str     rf
@@ -262,6 +256,9 @@ copyloop:  lda     r7                  ; copy code to destination address
            ; Allocate a block of memory that is the size of the configuration
            ; file plus one byte to zero terminate it.
 
+           ldi     55
+           plo     r7
+
            ghi     r7                  ; get size of file for heap
            phi     rc                  ;  block request
            glo     r7
@@ -271,6 +268,7 @@ copyloop:  lda     r7                  ; copy code to destination address
 
            ldi     0                   ; no alignment needed
            phi     r7
+           ldi     4
            plo     r7
 
            sep     scall               ; make allocation on heap,
@@ -299,8 +297,8 @@ copyloop:  lda     r7                  ; copy code to destination address
            plo     r9
 
            ldi     255                 ; read until end of file
-           phi     rc
            plo     rc
+           phi     rc
 
            sep     scall               ; read from file
            dw      o_read
@@ -312,28 +310,69 @@ copyloop:  lda     r7                  ; copy code to destination address
            dw      o_close
 
 
-           ; Setup RF to point to input configuration in memory, and also
-           ; push a copy to the stack that will be used to reference the
-           ; block in the module to make it temporarily permanent so it
-           ; doesn't get purged by d_reapheap.
+           ; Store address of data block into both dataptr and datablk.
+           ; The dataptr copy points to the next line to be processed,
+           ; the datablk copy always points to the beginning to use to
+           ; deallocate the block when we are done.
 
-           glo     r9                 ; save start of buffer, to stack
-           plo     rf
-           stxd                       ;  stack to use to delete at exit
-           ghi     r9
-           phi     rf
-           stxd
+           ghi     ra                  ; page address of module
+           phi     rd
+
+           ldi     low dataptr         ; point to dataptr
+           plo     rd
+
+           ghi     r9                  ; update dataptr
+           str     rd
+           inc     rd
+           glo     r9
+           str     rd
+
+           ldi     low datablk         ; point to datablk
+           plo     rd
+
+           ghi     r9                  ; update datablk
+           str     rd
+           inc     rd
+           glo     r9
+           str     rd
+
+
+           ; Hook the o_wrmboot vector so that we can cleanup our memory
+           ; blocks if a program exits this way. Save the original value
+           ; so we can jump to it to return, and to restore it at end.
+
+           ldi     high o_wrmboot      ; get pointer to o_wrmboot
+           phi     rb
+           ldi     low o_wrmboot
+           plo     rb
+
+           inc     rb                  ; skip lbr opcode
+
+           ldi     low wrmboot         ; move pointer to wrmboot variable
+           plo     rd
+
+           lda     rb                  ; copy o_wrmboot vector to wrmboot
+           str     rd
+           inc     rd
+           ldn     rb
+           str     rd
+
+           ldi     low badexit         ; update o_wrmboot to point to badexit
+           str     rb
+           dec     rb
+           ghi     ra
+           str     rb
 
 
            ; Jump to the persistent code that has been copied into high
            ; memory. Since this address is in a register and not known, do
-           ; the jump by switching to RD, then loading R3 and switching back.
+           ; the jump by switching P=F, then loading R3 and switching back.
 
-           ldi     high jumpblck      ; temporarily switch pc to rd so we
-           phi     rd                 ;  can load r3 for a jump
+           ldi     high jumpblck      ; temporarily switch pc to rf so we
+           phi     rf                 ;  can load r3 for a jump
            ldi     low jumpblck
-           plo     rd
-           sep     rd
+           plo     rf
+           sep     rf
 
 jumpblck:  ghi     ra                 ; load r3 with code block address
            phi     r3                 ;  and switch pc back to r3 to jump
@@ -341,8 +380,6 @@ jumpblck:  ghi     ra                 ; load r3 with code block address
            plo     r3
            sep     r3
 
-
-;-------------------------------------------------------------------------
 
            ; Start the persistent module code on a new page so that it forms
            ; a block of page-relocatable code that will be copied to himem.
@@ -360,15 +397,25 @@ module:    ; Memory-resident module code starts here
            ; From here is where we repeatedly loop back for input lines and
            ; process each as a command line.
 
-getline:   lda     rf                 ; skip any leading whitespace
+getline:   ghi     r3                  ; get a pointer to dataptr
+           phi     rd 
+           ldi     low dataptr
+           plo     rd
+
+           lda     rd                  ; get pointer into command file
+           phi     rf
+           ldn     rd
+           plo     rf
+
+skipspc:   lda     rf                  ; skip any leading whitespace
            bz      endfile
            smi     '!'
-           bnf     getline
+           bnf     skipspc
 
-           dec     rf                 ; back up because of lda above
+           dec     rf                  ; back up because of lda above
 
-           ghi     rf                 ; make three copies of pointer to
-           phi     r9                 ;  command line for various copying
+           ghi     rf                  ; make three copies of pointer to
+           phi     r9                  ;  command line for various copying
            phi     ra
            phi     rb
            glo     rf
@@ -376,175 +423,229 @@ getline:   lda     rf                 ; skip any leading whitespace
            plo     ra
            plo     rb
 
-scanline:  lda     ra                 ; skip to first control character
+scanline:  lda     ra                  ; skip to first control character
            bz      endfile
            smi     ' '
            bdf     scanline
 
-           dec     ra                 ; back up to first control character
-           ldi     0                  ;  and overwrite with zero byte, then
-           str     ra                 ;  advance again
+           dec     ra                  ; back up to first control character
+           ldi     0                   ;  and overwrite with zero byte, then
+           str     ra                  ;  advance again
            inc     ra
+
+           glo     ra                  ; update pointer in memory so we can
+           str     rd                  ;  retreive again at top of loop
+           dec     rd                  ;  since exec wipes out registers
+           ghi     ra
+           str     rd
 
            ; Count length of command line string so we can copy it
 
-           ldi     0                  ; prepare to count string length,
-           phi     rc                 ;  start with length of /bin/
+           ldi     0                   ; prepare to count string length,
+           phi     rc                  ;  start with length of /bin/
            ldi     5
            plo     rc
 
-strlen:    lda     rf                 ; get length of command line
-           inc     rc                 ;  including terminating null
+strlen:    lda     rf                  ; get length of command line
+           inc     rc                  ;  including terminating null
            bnz     strlen
 
            ; Allocate block on heap for copy of string
 
-           ldi     0                  ; no alignment needed, and only
-           phi     r7                 ;  temporary block
+           ldi     0                   ; no alignment, permanent block
+           phi     r7
+           ldi     4
            plo     r7
 
-           sep     scall              ; get block, if fails, treat as eof
+           sep     scall               ; get block, if fails, treat as eof
            dw      o_alloc
 
            bdf     endfile
 
-           ; Save pointers that we will need preserved across o_exec
+           ; Save pointer to the block containing the /bin/ command copy
 
-           glo     ra                 ; point to restart command scanning
-           stxd
-           ghi     ra
-           stxd
+           ghi     r3
+           phi     rd
+           ldi     low lineblk         ; move pointer to lineblk
+           plo     rd
 
-           glo     rf                 ; pointer to /bin/ prefixed string
-           stxd
-           ghi     rf
-           stxd
+           ghi     rf                  ; store into lineblk
+           str     rd
+           inc     rd
+           glo     rf
+           str     rd
 
            ; Concatenate /bin/ + command into allocated block
 
-           ghi     r3                 ; get pointer to /bin/ string
-           phi     ra
            ldi     low binpath
-           plo     ra
+           plo     rd
 
-strcpy:    lda     ra                 ; copy into start of the block
+strcpy:    lda     rd                  ; copy into start of the block
            str     rf
            inc     rf
            bnz     strcpy
 
-           dec     rf                 ; backup to terminating null
+           dec     rf                  ; backup to terminating null
 
-strcat:    lda     rb                 ; concatenate the command
+strcat:    lda     rb                  ; concatenate the command
            str     rf
            inc     rf
            bnz     strcat
 
            ; Try calling o_exec on the original command line
 
-           ghi     r9                 ; get pointer to command line
+           ghi     r9                  ; get pointer to command line
            phi     rf
            glo     r9
            plo     rf
 
-           sep     scall              ; try executing it
+           sep     scall               ; try executing it
            dw      o_exec
 
-           inc     r2                 ; pop pointer to the /bin/ prefixed
-           lda     r2                 ;  string here to clear from stack
+           bnf     execyes             ; if plain exec was good
+
+           ; If the plain command failed, try the copy prefixed with /bin/
+
+           ghi     r3                  ; get pointer to lineblk
+           phi     rd
+           ldi     low lineblk
+           plo     rd
+
+           lda     rd                  ; get value of lineblk pointer
            phi     rf
-           ldn     r2
+           ldn     rd
            plo     rf
 
-           bnf     execgood           ; if plain exec was good
-
-           sep     scall              ; try executing it
+           sep     scall               ; try executing it
            dw      o_exec
 
-           bdf     execfail           ; if second try failed also
+           bdf     execbad             ; if second try failed also
 
-execgood:  sep     scall              ; output a blank line if succeeded
+execyes:   sep     scall               ; output a blank line if succeeded
            dw      o_inmsg
            db      10,13,0
 
-           ; Get ready for next loop around
+execbad:   ghi     r3                  ; get pointer to lineblk
+           phi     rd
+           ldi     low lineblk
+           plo     rd
 
-execfail:  inc     r2                 ; restore input pointer from stack
-           lda     r2                 ;  to restart line scanning from
-           phi     ra
-           ldn     r2
-           plo     ra
-           
-           ; Clean up heap from exec'ed program. This marks the two blocks
-           ; we use as permanent before calling reapheap so that they don't
-           ; get removed, then unmarks them after. This is done this way
-           ; so that the blocks are not marked permanent when the child
-           ; program is so that they will get cleaned up in case the
-           ; child process does not return to us, so they are not abandoned.
-
-           inc     r2                 ; get pointer to data input block
-           lda     r2                 ;  so we can mark it permanent
-           phi     rb
-           ldn     r2
-           plo     rb
-
-           dec     r2                 ; push pointer back on stack so
-           ghi     rb                 ;  we can pop it again next time
-           stxd
-           
-           ghi     r3                 ; get pointer to code block
-           phi     rc
-           ldi     low module
-           plo     rc
-
-           dec     rb                 ; move to header and mark permanent
-           dec     rb
-           dec     rb
-           ldn     rb
-           ori     4
-           str     rb
-
-           dec     rc                 ; move to header and mark permanent
-           dec     rc
-           dec     rc
-           ldn     rc
-           ori     4
-           str     rc
-
-           sep     scall              ; clean heap of temporary blocks
-           dw      d_reapheap
-
-           ldn     rb                 ; unmark permanent
-           xri     4
-           str     rb
-
-           ldn     rc                 ; unmark permanent
-           xri     4
-           str     rc
-
-           ghi     ra                 ; when this was written, o_reapheap
-           phi     rf                 ;  destroys rf, otherwise this would
-           glo     ra                 ;  have gone directly into rf
+           lda     rd                  ; get value of lineblk pointer
+           phi     rf
+           ldn     rd
            plo     rf
 
-           br      getline            ; go find next line to process
+           sep     scall               ; deallocate block
+           dw      o_dealloc
+
+           br      getline             ; go process next line
 
 
-           ; At end of file (or an unlikely out of memory condition),
-           ; just drop up the data block pointer on the stack and
-           ; return. Since the heap blocks we allocated are marked
-           ; temporary, they will be cleaned up by Elf/OS.
+           ; We hook o_wrmboot so that we can clean up our memory block
+           ; if a program exits that way. This is much easier than trying
+           ; to properly resume because to just do this it doesn't matter
+           ; if the kernel has reset the stack pointer and destroyed our
+           ; return chain (or if the program has), so at least do this much.
+           ;
+           ; Also outputs a message so the users knows why init exited!
+           ;
+           ; What we do here is a little tricky... we setup R6 and the word
+           ; on top of the stack (which isn't really that relevant) to look
+           ; like o_wrmboot used SCALL to get to us instead of LBR. This
+           ; lets us use the same exit mechanism at the end either way.
 
-endfile:   inc     r2                 ; remove pointer to data block
-           inc     r2
+badexit:   sep     scall               ; let user know why
+           dw      o_inmsg
+           db      'ERROR: Init terminated by warm boot',13,10,0
 
-           sep     sret               ; return to caller
+           glo     r6                  ; push current value of r6
+           stxd
+           ghi     r6
+           stxd
+
+           ldi     high o_wrmboot      ; set o_wrmboot as the return address
+           phi     r6
+           ldi     low o_wrmboot
+           plo     r6
+
+           ghi     r3                  ; get pointer to lineblk
+           phi     rd
+           ldi     low lineblk
+           plo     rd
+
+           lda     rd                  ; get value of lineblk pointer
+           phi     rf
+           ldn     rd
+           plo     rf
+
+           sep     scall               ; deallocate block
+           dw      o_dealloc
 
 
-           ; This buffer with prepended /bin/ is used to build a copy of
-           ; the command line to look in bin directory if not found in cwd.
+           ; Restore original o_wrmboot vector and clean up our two remaining
+           ; data blocks. The block we use for a copy of the command line
+           ; was only a temporary block so it will get cleaned by the kernel.
+
+endfile:   ghi     r3                  ; get pointer to saved wrmboot
+           phi     rd
+           ldi     low wrmboot
+           plo     rd
+
+           ldi     high o_wrmboot      ; get pointer to o_wrmboot vector
+           phi     rf
+           ldi     low o_wrmboot
+           plo     rf
+
+           inc     rf                  ; skip lbr instruction
+
+           lda     rd                  ; get saved wrmboot address and
+           str     rf                  ;  restore back into o_wrmboot
+           inc     rf
+           ldn     rd
+           str     rf
+
+           ldi     low datablk         ; repoint to datablk address
+           plo     rd
+
+           lda     rd                  ; get address of datablk block
+           phi     rf
+           ldn     rd
+           plo     rf
+
+           sep     scall               ; deallocate it
+           dw      o_dealloc
+
+           ghi     r3                  ; get pointer to block we are in
+           phi     rf
+           ldi     low module
+           plo     rf
+
+
+           ; This is a little tricky too... how do you safely delete the
+           ; memory block you are executing from? What we do here is jump
+           ; to o_dealloc and it runs as though it was code inline to us
+           ; and the SRET at its end is just the same as if we did SRET.
+
+           lbr     o_dealloc           ; deallocate it and sret
+
+           ; The above is not really strictly necessary since deleting the
+           ; block in itself doesn't overwrite the memory that was in it,
+           ; but this way makes less assumptions about the internal working
+           ; of the heap manager by not relying on that current fact.
+
+
+           ; Variables that the resident module needs
+
+dataptr:   dw      0                   ; pointer to next line of input
+datablk:   dw      0                   ; pointer to block with input file
+lineblk:   dw      0                   ; pointer to /bin/ prefixed copy
+wrmboot:   dw      0                   ; saved original o_wrmboot vector
+
+
+           ; String for prefixing command line
 
 binpath:   db      '/bin/',0          ; for prefixing command line
-datafile:  dw      0
+
 
 modend:    ; End load the resident module code
 
