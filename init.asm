@@ -34,9 +34,9 @@ start:     org     2000h
            ; Build information
 
            db      8+80h              ; month
-           db      6                  ; day
+           db      12                 ; day
            dw      2021               ; year
-           dw      0                  ; build
+           dw      6                  ; build
 
            db      'See github.com/dmadole/Elfos-init for more info',0
 
@@ -414,129 +414,65 @@ skipspc:   lda     rf                  ; skip any leading whitespace
 
            dec     rf                  ; back up because of lda above
 
-           ghi     rf                  ; make three copies of pointer to
-           phi     r9                  ;  command line for various copying
-           phi     ra
-           phi     rb
+           ghi     rf                  ; make copy of pointer to continue
+           phi     r9                  ;  scanning for end with
            glo     rf
            plo     r9
-           plo     ra
-           plo     rb
 
-scanline:  lda     ra                  ; skip to first control character
+scanline:  lda     r9                  ; skip to first control character
            bz      endfile
            smi     ' '
            bdf     scanline
 
-           dec     ra                  ; back up to first control character
+           dec     r9                  ; back up to first control character
            ldi     0                   ;  and overwrite with zero byte, then
-           str     ra                  ;  advance again
-           inc     ra
+           str     r9                  ;  advance again
+           inc     r9
 
-           glo     ra                  ; update pointer in memory so we can
+           glo     r9                  ; update pointer in memory so we can
            str     rd                  ;  retreive again at top of loop
            dec     rd                  ;  since exec wipes out registers
-           ghi     ra
+           ghi     r9
            str     rd
+           dec     rd
 
-           ; Count length of command line string so we can copy it
-
-           ldi     0                   ; prepare to count string length,
-           phi     rc                  ;  start with length of /bin/
-           ldi     5
-           plo     rc
-
-strlen:    lda     rf                  ; get length of command line
-           inc     rc                  ;  including terminating null
-           bnz     strlen
-
-           ; Allocate block on heap for copy of string
-
-           ldi     0                   ; no alignment, permanent block
-           phi     r7
-           ldi     4
-           plo     r7
-
-           sep     scall               ; get block, if fails, treat as eof
-           dw      o_alloc
-
-           bdf     endfile
-
-           ; Save pointer to the block containing the /bin/ command copy
-
-           ghi     r3
-           phi     rd
-           ldi     low lineblk         ; move pointer to lineblk
-           plo     rd
-
-           ghi     rf                  ; store into lineblk
-           str     rd
-           inc     rd
-           glo     rf
-           str     rd
-
-           ; Concatenate /bin/ + command into allocated block
-
-           ldi     low binpath
-           plo     rd
-
-strcpy:    lda     rd                  ; copy into start of the block
-           str     rf
-           inc     rf
-           bnz     strcpy
-
-           dec     rf                  ; backup to terminating null
-
-strcat:    lda     rb                  ; concatenate the command
-           str     rf
-           inc     rf
-           bnz     strcat
 
            ; Try calling o_exec on the original command line
 
-           ghi     r9                  ; get pointer to command line
-           phi     rf
-           glo     r9
-           plo     rf
+           glo     rf                  ; save pointer to command line
+           str     rd
+           dec     rd
+           ghi     rf
+           str     rd
 
            sep     scall               ; try executing it
            dw      o_exec
 
            bnf     execyes             ; if plain exec was good
 
-           ; If the plain command failed, try the copy prefixed with /bin/
 
-           ghi     r3                  ; get pointer to lineblk
+           ; If the exec failed, try again with o_execbin, which needs RF
+           ; reset to the beginning of the line because o_exec changed it,
+           ; also RA needs to be the value that o_exec left when it failed.
+
+           ghi     r3                  ; get pointer to lineptr
            phi     rd
-           ldi     low lineblk
+           ldi     low lineptr
            plo     rd
 
-           lda     rd                  ; get value of lineblk pointer
+           lda     rd                  ; get value of lineptr pointer
            phi     rf
            ldn     rd
            plo     rf
 
            sep     scall               ; try executing it
-           dw      o_exec
+           dw      o_execbin
 
-           bdf     execbad             ; if second try failed also
+           bdf     getline             ; if second try failed just skip
 
 execyes:   sep     scall               ; output a blank line if succeeded
            dw      o_inmsg
            db      10,13,0
-
-execbad:   ghi     r3                  ; get pointer to lineblk
-           phi     rd
-           ldi     low lineblk
-           plo     rd
-
-           lda     rd                  ; get value of lineblk pointer
-           phi     rf
-           ldn     rd
-           plo     rf
-
-           sep     scall               ; deallocate block
-           dw      o_dealloc
 
            br      getline             ; go process next line
 
@@ -567,19 +503,6 @@ badexit:   sep     scall               ; let user know why
            phi     r6
            ldi     low o_wrmboot
            plo     r6
-
-           ghi     r3                  ; get pointer to lineblk
-           phi     rd
-           ldi     low lineblk
-           plo     rd
-
-           lda     rd                  ; get value of lineblk pointer
-           phi     rf
-           ldn     rd
-           plo     rf
-
-           sep     scall               ; deallocate block
-           dw      o_dealloc
 
 
            ; Restore original o_wrmboot vector and clean up our two remaining
@@ -636,15 +559,10 @@ endfile:   ghi     r3                  ; get pointer to saved wrmboot
 
            ; Variables that the resident module needs
 
+lineptr:   dw      0                   ; pointer to current command line
 dataptr:   dw      0                   ; pointer to next line of input
 datablk:   dw      0                   ; pointer to block with input file
-lineblk:   dw      0                   ; pointer to /bin/ prefixed copy
 wrmboot:   dw      0                   ; saved original o_wrmboot vector
-
-
-           ; String for prefixing command line
-
-binpath:   db      '/bin/',0          ; for prefixing command line
 
 
 modend:    ; End load the resident module code
